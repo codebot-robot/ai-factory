@@ -38,82 +38,37 @@ def main():
                 elif schedule == "hourly":
                     cron_schedule = "0 * * * *"
 
-    if not schedule:
-        print(f"Running agent {agent_name} immediately...")
-        yaml_content = textwrap.dedent(f"""\
-            apiVersion: agents.x-k8s.io/v1alpha1
-            kind: Sandbox
-            metadata:
-              generateName: {agent_name}-sandbox-
-              labels:
-                agent: {agent_name}
+    env_vars = f"""
+                - name: AGENT_NAME
+                  value: {agent_name}"""
+    if schedule:
+        env_vars += f"""
+                - name: CRON_SCHEDULE
+                  value: "{cron_schedule}" """
+
+    print(f"Deploying long-running Sandbox for agent {agent_name}...")
+    yaml_content = textwrap.dedent(f"""\
+        apiVersion: agents.x-k8s.io/v1alpha1
+        kind: Sandbox
+        metadata:
+          generateName: {agent_name}-sandbox-
+          labels:
+            agent: {agent_name}
+        spec:
+          podTemplate:
             spec:
-              podTemplate:
-                spec:
-                  containers:
-                  - name: agent
-                    image: {agent_image}
-                    env:
-                    - name: AGENT_NAME
-                      value: {agent_name}
-                  restartPolicy: Never
-            """)
-        
-        process = subprocess.run(["kubectl", "create", "-f", "-"], input=yaml_content, text=True)
-        if process.returncode == 0:
-            print("Sandbox creation requested.")
-        else:
-            sys.exit(process.returncode)
+              containers:
+              - name: agent
+                image: {agent_image}
+                env:{env_vars}
+              restartPolicy: Never
+        """)
+    
+    process = subprocess.run(["kubectl", "create", "-f", "-"], input=yaml_content, text=True)
+    if process.returncode == 0:
+        print("Sandbox creation requested.")
     else:
-        print(f"Scheduling agent {agent_name} with schedule: {cron_schedule}...")
-        
-        yaml_content = textwrap.dedent(f"""\
-            apiVersion: batch/v1
-            kind: CronJob
-            metadata:
-              name: {agent_name}-scheduler
-              labels:
-                agent: {agent_name}
-            spec:
-              schedule: "{cron_schedule}"
-              jobTemplate:
-                spec:
-                  template:
-                    spec:
-                      serviceAccountName: top-level-agent-sa
-                      containers:
-                      - name: kubectl
-                        image: bitnami/kubectl:latest
-                        command:
-                        - /bin/sh
-                        - -c
-                        - |
-                          cat <<INNERYAML | kubectl create -f -
-                          apiVersion: agents.x-k8s.io/v1alpha1
-                          kind: Sandbox
-                          metadata:
-                            generateName: {agent_name}-sandbox-
-                            labels:
-                              agent: {agent_name}
-                          spec:
-                            podTemplate:
-                              spec:
-                                containers:
-                                - name: agent
-                                  image: {agent_image}
-                                  env:
-                                  - name: AGENT_NAME
-                                    value: {agent_name}
-                                restartPolicy: Never
-                          INNERYAML
-                      restartPolicy: OnFailure
-            """)
-            
-        process = subprocess.run(["kubectl", "apply", "-f", "-"], input=yaml_content, text=True)
-        if process.returncode == 0:
-            print("CronJob scheduler created.")
-        else:
-            sys.exit(process.returncode)
+        sys.exit(process.returncode)
 
 if __name__ == "__main__":
     main()
