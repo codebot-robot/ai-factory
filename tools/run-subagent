@@ -18,102 +18,73 @@ def main():
     project_id = os.environ.get("GCP_PROJECT_ID", "my-project")
     agent_image = f"gcr.io/{project_id}/ai-on-gke-agent:latest"
 
-    cron_schedule = schedule
+    sleep_seconds = None
     if schedule:
-        # Helper to convert some basic natural language schedules to cron
-        # e.g., "every 8 hours" -> "0 */8 * * *"
+        # Helper to convert schedules to sleep seconds for long-running sandboxes
         m = re.match(r'^every\s+([0-9]+)\s+hours?$', schedule)
         if m:
-            cron_schedule = f"0 */{m.group(1)} * * *"
+            sleep_seconds = int(m.group(1)) * 3600
         else:
             m = re.match(r'^every\s+([0-9]+)\s+minutes?$', schedule)
             if m:
-                cron_schedule = f"*/{m.group(1)} * * * *"
+                sleep_seconds = int(m.group(1)) * 60
             else:
                 m = re.match(r'^every\s+([0-9]+)\s+days?$', schedule)
                 if m:
-                    cron_schedule = f"0 0 */{m.group(1)} * *"
-                elif schedule == "daily":
-                    cron_schedule = "0 0 * * *"
-                elif schedule == "hourly":
-                    cron_schedule = "0 * * * *"
+                    sleep_seconds = int(m.group(1)) * 86400
+                elif schedule == "daily" or schedule == "0 0 * * *":
+                    sleep_seconds = 86400
+                elif schedule == "hourly" or schedule == "0 * * * *":
+                    sleep_seconds = 3600
+                else:
+                    # try to parse basic cron
+                    m = re.match(r'^0 \*/([0-9]+) \* \* \*$', schedule)
+                    if m:
+                        sleep_seconds = int(m.group(1)) * 3600
+                    else:
+                        m = re.match(r'^\*/([0-9]+) \* \* \* \*$', schedule)
+                        if m:
+                            sleep_seconds = int(m.group(1)) * 60
+                        else:
+                            print(f"Warning: Could not parse schedule '{schedule}' into an interval. Defaulting to 1 hour.")
+                            sleep_seconds = 3600
 
-    if not schedule:
-        print(f"Running agent {agent_name} immediately...")
-        yaml_content = textwrap.dedent(f"""\
-            apiVersion: agents.x-k8s.io/v1alpha1
-            kind: Sandbox
-            metadata:
-              generateName: {agent_name}-sandbox-
-              labels:
-                agent: {agent_name}
-            spec:
-              podTemplate:
-                spec:
-                  containers:
-                  - name: agent
-                    image: {agent_image}
-                    env:
+    env_vars = f"""
                     - name: AGENT_NAME
-                      value: {agent_name}
-                  restartPolicy: Never
-            """)
-        
-        process = subprocess.run(["kubectl", "create", "-f", "-"], input=yaml_content, text=True)
-        if process.returncode == 0:
-            print("Sandbox creation requested.")
-        else:
-            sys.exit(process.returncode)
+                      value: {agent_name}"""
+    if sleep_seconds:
+        env_vars += f"""
+                    - name: SLEEP_SECONDS
+                      value: "{sleep_seconds}"\
+"""
+
+    if sleep_seconds:
+        print(f"Running long-lived agent {agent_name} with interval: {sleep_seconds} seconds...")
     else:
-        print(f"Scheduling agent {agent_name} with schedule: {cron_schedule}...")
-        
-        yaml_content = textwrap.dedent(f"""\
-            apiVersion: batch/v1
-            kind: CronJob
-            metadata:
-              name: {agent_name}-scheduler
-              labels:
-                agent: {agent_name}
+        print(f"Running agent {agent_name} immediately...")
+
+    yaml_content = textwrap.dedent(f"""\
+        apiVersion: agents.x-k8s.io/v1alpha1
+        kind: Sandbox
+        metadata:
+          generateName: {agent_name}-sandbox-
+          labels:
+            agent: {agent_name}
+        spec:
+          podTemplate:
             spec:
-              schedule: "{cron_schedule}"
-              jobTemplate:
-                spec:
-                  template:
-                    spec:
-                      serviceAccountName: top-level-agent-sa
-                      containers:
-                      - name: kubectl
-                        image: bitnami/kubectl:latest
-                        command:
-                        - /bin/sh
-                        - -c
-                        - |
-                          cat <<INNERYAML | kubectl create -f -
-                          apiVersion: agents.x-k8s.io/v1alpha1
-                          kind: Sandbox
-                          metadata:
-                            generateName: {agent_name}-sandbox-
-                            labels:
-                              agent: {agent_name}
-                          spec:
-                            podTemplate:
-                              spec:
-                                containers:
-                                - name: agent
-                                  image: {agent_image}
-                                  env:
-                                  - name: AGENT_NAME
-                                    value: {agent_name}
-                                restartPolicy: Never
-                          INNERYAML
-                      restartPolicy: OnFailure
-            """)
-            
-        process = subprocess.run(["kubectl", "apply", "-f", "-"], input=yaml_content, text=True)
-        if process.returncode == 0:
-            print("CronJob scheduler created.")
-        else:
-            sys.exit(process.returncode)
+              containers:
+              - name: agent
+                image: {agent_image}
+                env:{env_vars}
+              restartPolicy: Never
+        """)
+    
+    process = subprocess.run(["kubectl", "create", "-f", "-"], input=yaml_content, text=True)
+    if process.returncode == 0:
+        print("Sandbox creation requested.")
+    else:
+        sys.exit(process.returncode)
 
 if __name__ == "__main__":
     main()

@@ -16,5 +16,18 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-echo "Running gemini-cli for agent ${AGENT_NAME}..."
-gemini-cli --yolo "$(cat $PROMPT_FILE)"
+if [ -n "$SLEEP_SECONDS" ]; then
+  while true; do
+    echo "Running gemini-cli for agent ${AGENT_NAME}..."
+    gemini-cli --yolo "$(cat $PROMPT_FILE)"
+    
+    echo "Sleeping for ${SLEEP_SECONDS} seconds..."
+    sleep "$SLEEP_SECONDS"
+    
+    echo "Pulling latest code..."
+    git pull
+  done
+else
+  echo "Running gemini-cli for agent ${AGENT_NAME}..."
+  gemini-cli --yolo "$(cat $PROMPT_FILE)"
+fi
